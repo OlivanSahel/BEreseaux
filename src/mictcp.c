@@ -2,7 +2,11 @@
 #include <api/mictcp_core.h>
 #include <stdbool.h>
 #define MAX_SOCK 100
-#define LOSS_RATE 50   // pourcentage de perte
+#define LOSS_RATE 20   // pourcentage de perte
+#define LOST_RATIO 20   // Pourcentage de perte accepté (entier)
+#define LOST_ARRAY_SIZE (100 / LOST_RATIO + 1) // Calcul de la taille du tableau en utilisant des entiers
+
+unsigned int lostArray[LOST_ARRAY_SIZE] = {0};
 
 // mic_tcp_sock tab_sock[MAX_SOCK];
 mic_tcp_sock sock = {0};
@@ -54,6 +58,23 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr)
     return 0;
 }
 
+void rightShiftLostArray(int valueFirstCase)
+{
+    for (int i = LOST_ARRAY_SIZE - 1; i > 0; i--) { // Décalage à droite dans le tableau
+        lostArray[i] = lostArray[i - 1];
+    }
+    lostArray[0] = valueFirstCase;
+}
+
+int weAcceptLoss()
+{
+    for (int i = 0; i < LOST_ARRAY_SIZE; i++) { // On regarde si il y a un 1 dans le tableau => on ne pourrait pas accepter la perte
+        if (lostArray[i] == 1) {
+            return false; // We do not accept loss
+        }
+    }
+    return true; // We accept loss
+}
 /*
  * Permet de réclamer l’envoi d’une donnée applicative
  * Retourne la taille des données envoyées, et -1 en cas d'erreur
@@ -69,17 +90,30 @@ int mic_tcp_send(int mic_sock, char *mesg, int mesg_size) {
     pdu.payload.data = mesg;
     pdu.payload.size = mesg_size;
 
-    int weReceiveAck = 1;
-    mic_tcp_pdu pduAck;
+    int ok = false;
+    mic_tcp_pdu pduAck = {0};
     int taillePDU = 0;
-    while(weReceiveAck == 1){
+    int res = 0;
+    while(ok == false){
+        res = 0;
         taillePDU = IP_send(pdu, sock.remote_addr.ip_addr); 
-        int res = IP_recv(&pduAck, &sock.local_addr.ip_addr, &sock.remote_addr.ip_addr, 200); // Timeout
-        if (res < 0){
-            weReceiveAck = 1;
+        res = IP_recv(&pduAck, &sock.local_addr.ip_addr, &sock.remote_addr.ip_addr, 200); 
+        printf("res = %d \n", res);
+        if (res == -1){ //timeout
+            if(weAcceptLoss()){
+                printf(("on accept la perte \n"));
+                ok = true;
+            }
+            else{
+                printf(("on n'accept PAS la perte \n"));
+                ok = false;
+            }
+            rightShiftLostArray(1);
         }
-        else{
-            weReceiveAck = 0;
+
+        else{ // on a reçu le ack, on sort de la boucle.
+            rightShiftLostArray(0);
+            ok = true;
         }
     }
     PA = (PA + 1) % 2;
